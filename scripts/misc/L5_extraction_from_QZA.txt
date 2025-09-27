@@ -1,0 +1,32 @@
+### This is to be used in a Linux/bash environment with the .qza present
+##
+#
+
+# install biom-format
+pip install biom-format
+
+# To extract qza file locally...
+# segregate
+mkdir temp
+cp noWD_featuretable_L5.qza /temp
+cd temp
+
+# Here we wanted to extract L5 as it gave us the best quality data
+unzip noWD_featuretable_L5.qza
+
+# The biom file is within the QZA file, lets find it and convert the data to tab separated format
+find . -name "*.biom"
+biom convert -i [biom-file-path] -o feature_table_L5.txt --to-tsv
+
+# Check if it worked
+head feature_table_L5.txt
+# See dimensions
+wc -l feature_table_L5.txt
+
+# copy the result back to main directory
+cp feature_table_L5.txt ../
+
+# Cleanup
+cd ..
+rm -rf temp/
+
