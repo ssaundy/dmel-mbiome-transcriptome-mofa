@@ -1,0 +1,33 @@
+#!/bin/bash
+#PBS -N CUTADAPT_STEPS
+#PBS -l walltime=01:00:00,mem=4gb,nodes=1:ppn=2
+#PBS -M 2482773s@student.gla.ac.uk
+#PBS -m abe
+#PBS -j oe
+#PBS -t 1-119%10
+#PBS -o /export/biostuds/2482773s/THESIS/RNAseq/logs/
+
+cd /export/biostuds/2482773s/THESIS/RNAseq
+source /export/biostuds/2482773s/.bashrc
+conda activate rnaseq
+set -e
+
+mkdir -p analysis/cutadapt_quantseq
+mkdir -p analysis/cutadapt_logs
+
+SAMPLE_FILES=($(ls fastq/*_R1_001.fastq.gz | sort))
+SAMPLE_FILE=${SAMPLE_FILES[$((PBS_ARRAYID-1))]}
+SAMPLE=$(basename "$SAMPLE_FILE" _R1_001.fastq.gz)
+
+TEMP_DIR="analysis/cutadapt_quantseq/temp"
+mkdir -p "$TEMP_DIR"
+
+cutadapt -m 20 -O 20 -a "polyA=A{20}" -a "QUALITY=G{20}" -n 2 "$SAMPLE_FILE" -o "${TEMP_DIR}/${SAMPLE}_step1.fastq.gz" > "analysis/cutadapt_logs/${SAMPLE}_step1.log" 2>&1
+
+cutadapt -m 20 -O 3 --nextseq-trim=10 -a "r1adapter=A{18}AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC;min_overlap=3;max_error_rate=0.100000" "${TEMP_DIR}/${SAMPLE}_step1.fastq.gz" -o "${TEMP_DIR}/${SAMPLE}_step2.fastq.gz" > "analysis/cutadapt_logs/${SAMPLE}_step2.log" 2>&1
+
+cutadapt -m 20 -O 20 -g "r1adapter=AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC;min_overlap=20" --discard-trimmed "${TEMP_DIR}/${SAMPLE}_step2.fastq.gz" -o "analysis/cutadapt_quantseq/${SAMPLE}_R1_quantseq.fastq.gz" > "analysis/cutadapt_logs/${SAMPLE}_step3.log" 2>&1
+
+rm "${TEMP_DIR}/${SAMPLE}_step1.fastq.gz" "${TEMP_DIR}/${SAMPLE}_step2.fastq.gz"
+
+echo "${SAMPLE} is complete"
