@@ -1,1 +1,396 @@
+rm(list=ls())
+#set wd
+setwd("C:/Users/sandr/OneDrive/Desktop/mbio")
+# link theme file
+source("OMICS.R")
+
+#load packages
+#if (!require("pacman")) install.packages("pacman")
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+  #install.packages("BiocManager")
+pacman::p_load(vegan, pheatmap, ggplot2, ape, SummarizedExperiment)
+
+#
+##
+###
+# set the metadata making any strings factors 
+ind <- read.csv("samples.csv", stringsAsFactors=T)
+# make a new col for mitonuclear by concatenating the mito and nuc genotype identifiers
+# factor() converts the resulting concat strings to factor variables
+ind$mitonuclear <- with(ind, factor(paste(mito, nuclear, sep="")))
+
+# sort dodgy naming of sample col.....(i..samp)
+colnames(ind)[1] <- "samp"
+
+
+# load in the data at your chosen filtering threshold - we went with 1% abund in 10% samps
+# at least 1percent abundance in at least 10percent of samples - it offered the clearest resolution.
+d <- read.table("noWD_featuretable_L5_1_10.txt", header=T, sep="\t")
+
+
+head(d)
+dim(d)
+###
+##
+#
+
+#check correspondence
+which(ind$samp %in% colnames(d))
+
+#remove lines of index for which we have no data
+nrow(ind)
+ind <- droplevels(subset(ind, samp %in% colnames(d)))
+nrow(ind)
+
+#remove dodgy samples (run heatmap without this line to see)
+ind <- droplevels(subset(ind, !samp %in% c("DS37", "DS2")))
+
+#turn the data into just a matrix
+rowInd <- d[,c(1,109)]
+head(rowInd)
+d <- d[,2:108]
+dim(d)
+
+# Assign rownames
+rownames(d) <- rowInd$OTU
+
+rownames(ind) <- ind$samp
+
+#line up the columns of the matrix to the metadata
+d <- d[,match(ind$samp, colnames(d))]
+colnames(d)
+
+### PERM ###
+#test for mito-nuclear effects in microbiota
+# make this into a table on it's own, then 
+set.seed(1984)
+perm1 <- adonis2(t(d) ~ population, data=ind, by="terms", method = "bray") # I used bray-curtis matrix here to match perm updates as this is optimal
+perm1	#the microbiota do differ among these populations (this cmmt for 1_10)
+
+perm2 <- adonis2(t(d) ~ mito * nuclear, data=ind, by="terms")
+perm2	#there is no mito-nuclear interaction (1_10)
+
+#simplify model to see if there are independent effects of mito and nuc
+perm3 <- adonis2(t(d) ~ mito + nuclear, data=ind, by="terms")
+perm3	#no. there is only an effect of mitochondria. (1_10)
+
+###
+######
+########
+
+# PERM UPDATE
+# PERMANOVA Analysis for Microbiota Community Structure
+# Using 1% in 10% samples filtering level
+#
+library(vegan)
+library(ggplot2)
+library(gridExtra)
+library(kableExtra)
+library(dplyr)
+
+
+set.seed(1984)
+# pop is perm1 above
+# Mitonuclear interaction
+perm_mitonuclear <- adonis2(t(d) ~ mito * nuclear, data=ind, by="terms", method="bray")
+print(perm_mitonuclear)
+
+# Mito + nuclear
+perm_additive <- adonis2(t(d) ~ mito + nuclear, data=ind, by="terms", method="bray")
+print(perm_additive)
+
+### Create summary tables ###
+# Population effect
+
+#
+create_population_table <- function() {
+  # pull our relevant stats from the analysis
+  pop_r2 <- round(perm1$R2[1], 3)  # Using perm1 from initial
+  pop_f <- round(perm1$F[1], 2)
+  pop_p <- perm1$`Pr(>F)`[1]
+  # reusable func to assign sig groups for <0.001, <0.01, <0.05
+  format_p <- function(p) {
+    if (p < 0.001) return("< 0.001")
+    else if (p < 0.01) return("< 0.01")
+    else if (p < 0.05) return("< 0.05")
+    else return(sprintf("%.3f", p)) # round not sig values to 3 sig figs
+  }
+  # Create a df for table generation
+  population_table <- data.frame(
+    Factor = "Population",
+    R2 = pop_r2,
+    F_statistic = pop_f,
+    P_value = format_p(pop_p),
+    # set sig constraint visual as in adonis2 output as I will set a formatted legend for final table
+    Significance = ifelse(pop_p < 0.001, "***", ifelse(pop_p < 0.01, "**", ifelse(pop_p < 0.05, "*", "ns")))
+  )
+  
+  return(population_table)
+}
+
+# same again for mitonuclear effects (without pop) using the new analysis
+create_mitonuclear_table <- function() {
+  mito_r2 <- round(perm_additive$R2[1], 3)
+  mito_f <- round(perm_additive$F[1], 2)
+  mito_p <- perm_additive$`Pr(>F)`[1]
+  
+  nuclear_r2 <- round(perm_additive$R2[2], 3)
+  nuclear_f <- round(perm_additive$F[2], 2)
+  nuclear_p <- perm_additive$`Pr(>F)`[2]
+  
+  interaction_r2 <- round(perm_mitonuclear$R2[3], 3)
+  interaction_f <- round(perm_mitonuclear$F[3], 2)
+  interaction_p <- perm_mitonuclear$`Pr(>F)`[3]
+  
+  format_p <- function(p) {
+    if (p < 0.001) return("< 0.001")
+    else if (p < 0.01) return("< 0.01")
+    else if (p < 0.05) return("< 0.05")
+    else return(sprintf("%.3f", p))
+  }
+  
+  mitonuclear_table <- data.frame(
+    Factor = c("Mitochondrial", "Nuclear", "Mito × Nuclear"),
+    R2 = c(mito_r2, nuclear_r2, interaction_r2),
+    F_statistic = c(mito_f, nuclear_f, interaction_f),
+    P_value = c(format_p(mito_p), format_p(nuclear_p), format_p(interaction_p)),
+    # sig constraints
+    Significance = c(
+      ifelse(mito_p < 0.001, "***", ifelse(mito_p < 0.01, "**", ifelse(mito_p < 0.05, "*", "ns"))),
+      ifelse(nuclear_p < 0.001, "***", ifelse(nuclear_p < 0.01, "**", ifelse(nuclear_p < 0.05, "*", "ns"))),
+      ifelse(interaction_p < 0.001, "***", ifelse(interaction_p < 0.01, "**", ifelse(interaction_p < 0.05, "*", "ns")))
+    )
+  )
+  
+  return(mitonuclear_table)
+}
+
+# Generate both tables
+population_results <- create_population_table()
+mitonuclear_results <- create_mitonuclear_table()
+
+# Formatted with kable
+kable(population_results, 
+      caption = "PERMANOVA Results Testing Population Effects on Microbiota Community Structure (Bray-Curtis dissimilarity)",
+      col.names = c("Factor", "R²", "F", "P-value", "Sig."),
+      align = c('l', 'c', 'c', 'c', 'c')) %>% # set the factor name to LHS and centre data cols for separation
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), 
+                full_width = FALSE,
+                position = "center") %>%
+  footnote(general = "Significance codes: *** P < 0.001, ** P < 0.01, * P < 0.05, ns = not significant")
+
+
+kable(mitonuclear_results,
+      caption = "PERMANOVA Results Testing Mitonuclear Effects on Microbiota Community Structure (Bray-Curtis dissimilarity)", 
+      col.names = c("Factor", "R²", "F", "P-value", "Sig."),
+      align = c('l', 'c', 'c', 'c', 'c')) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), 
+                full_width = FALSE,
+                position = "center") %>%
+  footnote(general = "Significance codes: *** P < 0.001, ** P < 0.01, * P < 0.05, ns = not significant")
+
+########
+#####
+###
+
+
+###################################################################
+##################### NOT USED ####################################
+#pheatmap(log(d+1),
+ #        annotation_col=ind[,c("mito", "nuclear", "population")],
+   #      cluster_cols=F,
+     #    labels_row=rowInd$OTU.ID#,
+         #	scale="row"
+#)
+
+###################################################################
+############ PCA NOT USED ########################################
+#PCA
+pca1 <- prcomp(t(log2(d+1)), scale=T, center=T)
+summary(pca1)
+PCADF <- data.frame(ind, pca1$x)
+p1 <- ggplot(data=PCADF, aes(x=PC1, y=PC2, col=mitonuclear))
+p1 + 
+  geom_point() +
+  facet_grid(nuclear ~ mito) +
+  theme_bw()
+###################################################################
+
+#PCoA on LOG microbiome reads
+dDist <- vegdist(as.matrix(t(log2(d+1))), method = "bray") # Bray-Curtis dissimilarity matrix used in accordance with perm
+PcoA <- cmdscale(dDist) # cmdscale = classical multidimensional scaling
+PcoDF <- data.frame(ind, Dim1=PcoA[,1], Dim2=PcoA[,2]) # top 2 axes that explain the most variation
+# Plot it...
+p2 <- ggplot(data=PcoDF, aes(x=Dim1, y=Dim2, col=mitonuclear))
+p2 + 
+  geom_point() +
+  facet_grid(nuclear ~ mito) +
+  theme_bw() +
+  scale_y_continuous(expand = c(0,0))
+
+
+# Corresponding box plots
+p3 <- ggplot(data=PcoDF, aes(y=Dim1, x=mitonuclear, col=mitonuclear))
+p3 + 
+  geom_boxplot(outliers=F) +
+  geom_jitter() +
+  nature_omics_theme
+
+p4 <- ggplot(data=PcoDF, aes(y=Dim2, x=mitonuclear, col=mitonuclear))
+p4 + 
+  geom_boxplot(outliers=F) +
+  geom_jitter() +
+  nature_omics_theme
+
+##
+### PCoA fig update
+##
+# Calculate diversity indices
+shannon <- diversity(t(d), index="shannon")
+richness <- specnumber(t(d))
+
+### set margins (co-ord with relAb multi plot - particular sizing diffs cause issues for each other)
+par(mar=c(5,4,4,2))
+##re
+layout(matrix(c(1,2,3,4), nrow=2, byrow=TRUE),heights = c(1,1,0.5,0.5))
+
+# Define mitonuclear grouping colours
+mitonuclear_colors <- c("AA" = "red", "AB" = "darkorchid1", "BA" = "orange", "BB" = "blue")
+
+# Calculate sig
+shannon_t_test <- t.test(shannon ~ ind$mito)
+p_value <- round(shannon_t_test$p.value, 3)
+print(shannon_t_test)
+
+# Shannon diversity by mito
+colors_mito <- c("red", "blue")
+plot(shannon, col=colors_mito[as.factor(ind$mito)], pch=19, cex=1.2,
+     xlab="Sample", ylab="Shannon Diversity", 
+     main="Shannon Diversity by Mito",
+     ylim=c(0, ceiling(max(shannon)))) # to keep it tidy (the fig was grossly oversized for the data)
+mtext(paste0("p = ", p_value), side=3, line=0.5, cex=0.9)
+par(xpd=TRUE)
+legend("right", inset=c(-0.15, 0),
+       legend=levels(as.factor(ind$mito)), 
+       col=colors_mito, pch=19, cex=0.9, bty="n") #remove the border from legends - bty = boxtype
+par(xpd=FALSE)
+
+# PCoA re-plot
+plot(PcoDF$Dim1, PcoDF$Dim2, 
+     col=mitonuclear_colors[as.factor(PcoDF$mitonuclear)], 
+     pch=19,
+     xlab="PCoA Dimension 1", 
+     ylab="PCoA Dimension 2",
+     ylim=range(PcoDF$Dim2),
+     main="PCoA")
+par(xpd=TRUE)
+legend("right", inset=c(-0.15, 0),
+       legend=names(mitonuclear_colors), 
+       col=mitonuclear_colors, pch=19, cex=0.8, bty="n")
+par(xpd=FALSE)
+
+# PCoA Dim1 boxplot with legend
+boxplot(Dim1 ~ mitonuclear, data=PcoDF, 
+        col=mitonuclear_colors[levels(PcoDF$mitonuclear)],
+        main="PCoA Dim1",
+        ylab="PCoA Dimension 1",
+        las=2)
+par(xpd=TRUE)
+legend("right", inset=c(-0.15, 0),
+       legend=names(mitonuclear_colors),
+       col=mitonuclear_colors, pch=15, cex=0.7)
+par(xpd=FALSE)
+
+# PCoA Dim2 boxplot with legend
+boxplot(Dim2 ~ mitonuclear, data=PcoDF, 
+        col=mitonuclear_colors[levels(PcoDF$mitonuclear)],
+        main="PCoA Dim2", 
+        ylab="PCoA Dimension 2",
+        las=2)
+par(xpd=TRUE)
+legend("right", inset=c(-0.15, 0),
+       legend=names(mitonuclear_colors),
+       col=mitonuclear_colors, pch=15, cex=0.7, bty="n")
+par(xpd=FALSE)
+
+# Reset layout
+layout(1)
+
+##
+### Calculate relative abundances
+##
+### updated
+##
+
+### calculate relative abundances
+# log2 transform
+d <- log2(d + 1)
+
+relAb <- t(apply(d, 1, y=colSums(d), function(x, y){x/y}))
+
+# Collect p-values to plot each ASV individually
+# make empty vectors to store
+p_values <- c()
+taxa_names <- c()
+
+par(mfrow=c(1,1))
+par(bty="n")
+
+
+# Continue with coefficient of variation analysis...
+# Coefficient of variation = standard deviation / mean
+coefVar <- apply(d, 1, function(x){var(x)/mean(x)})
+par(mar=c(12, 4, 4, 2))
+barplot(coefVar, las=2)
+
+
+# Set up multi-panel plot - adjust based on number of taxa
+n_taxa <- nrow(relAb)
+n_cols <- ceiling(sqrt(n_taxa))
+n_rows <- ceiling(n_taxa / n_cols)
+par(mfrow=c(3,4))
+#par(mar=c(5,3,2,2))
+par(mar=c(4,4.5,4.5,1)) # the right one; had to disable to fix prev plot
+par(bty="n")
+
+
+for(i in 1:nrow(relAb)){
+  ASV <- rowInd$OTU.ID[i]
+  y <- as.numeric(relAb[i,])
+  x3 <- ind$mito
+  
+  # box plots (i) comparing mitoA vs mitoB
+  plot(y ~ x3, main=paste(ASV), las=2, 
+       xlab="mtDNA", ylab="Relative Abundance", outline=F,
+       col=c("red", "blue"), cex.main=0.9, cex.axis=0.8)
+  
+  y_A <- y[ind$mito=="A"]
+  y_B <- y[ind$mito=="B"]
+  
+  # Wilcoxon test and collect results
+  test_result <- wilcox.test(y_A, y_B)
+  p_values <- c(p_values, test_result$p.value)
+  taxa_names <- c(taxa_names, ASV)
+  
+  # Add p-value to plot (position under the titles w/ mtext)
+  if(test_result$p.value < 0.001) {
+    p_text <- "p < 0.001"
+  } else {
+    p_text <- paste("p =", round(test_result$p.value, 3))
+  }
+  #mtext(p_text, side=3, line=-2, cex=0.7)
+  #mtext(p_text, side=3, line=0.5, cex=0.6)
+  mtext(p_text, side=3, line=-0.1, cex=0.7)
+  #text(x=1.5, y=max(y)*0.85, labels=p_text, cex=0.7, font=1)
+}
+
+# Reset layout
+par(mfrow=c(1,1))
+par(mar=c(5,4.8,4,2)) 
+#par(mar=c(3.5,3.5,3.5,1))
+
+# Apply FDR correction post loop
+adjusted_p <- p.adjust(p_values, method="fdr")
+results_df <- data.frame(Taxa=taxa_names, P_value=p_values, FDR=adjusted_p)
+significant <- results_df[results_df$FDR < 0.05,]
 
