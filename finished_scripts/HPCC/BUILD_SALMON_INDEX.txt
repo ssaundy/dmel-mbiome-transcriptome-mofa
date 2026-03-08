@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -N SALMON_INDEX
+#PBS -l walltime=01:30:00,mem=16gb,nodes=1:ppn=8
+#PBS -M 2482773s@student.gla.ac.uk
+#PBS -m abe
+#PBS -j oe
+#PBS -o logs/
+
+cd $HOME/THESIS/RNAseq
+source $HOME/.bashrc
+conda activate rnaseq
+
+REF_DIR=reference
+OUTPUT_DIR=analysis
+
+mkdir -p ${OUTPUT_DIR}/salmon_index
+
+# Build salmon index
+salmon index -t ${REF_DIR}/clean_transcriptome.fa \
+        -i ${OUTPUT_DIR}/salmon_index \
+        --threads 8
