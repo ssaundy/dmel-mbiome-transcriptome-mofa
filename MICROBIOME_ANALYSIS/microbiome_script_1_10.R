@@ -59,13 +59,254 @@ d <- d[,2:108]
 dim(d)
 
 # Assign rownames
-rownames(d) <- rowInd$OTU
+#rownames(d) <- rowInd$OTU
+rownames(d) <- rowInd$`OTU ID`
 
 rownames(ind) <- ind$samp
 
 #line up the columns of the matrix to the metadata
 d <- d[,match(ind$samp, colnames(d))]
 colnames(d)
+#####
+####
+###
+#
+
+# log2 transform
+relAb <- t(apply(d, 1, y=colSums(d), function(x, y){x/y}))
+
+##################################################
+## ASV TAXON STACKED BARPLOT for Fig 1
+## relAb is already calculated 
+##################################################
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Make df
+relAb_df <- as.data.frame(relAb)
+relAb_df$taxon <- rowInd$`OTU ID`  # ` ` needed due to space in col name
+
+relAb_long <- relAb_df %>%
+  pivot_longer(-taxon, names_to = "samp", values_to = "rel_ab") %>%
+  left_join(ind[, c("samp", "mitonuclear")], by = "samp")
+
+#Order samples by mitonuclear genotype 
+sample_order <- ind %>%
+  arrange(mitonuclear, samp) %>%
+  pull(samp)
+
+relAb_long$samp <- factor(relAb_long$samp, levels = sample_order)
+
+# Colour palette for 12 taxa 
+taxa_list <- unique(relAb_long$taxon)
+
+taxon_colours <- setNames(
+  c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
+    "#D55E00", "#CC79A7", "#999999", "#44AA99", "#882255",
+    "#DDCC77", "#117733"),
+  taxa_list
+)
+
+relAb_long$taxon <- factor(relAb_long$taxon, levels = taxa_list)
+
+#Genotype group divider positions 
+group_positions <- relAb_long %>%
+  distinct(samp, mitonuclear) %>%
+  arrange(samp) %>%
+  group_by(mitonuclear) %>%
+  summarise(
+    xmin = min(as.numeric(samp)),
+    xmax = max(as.numeric(samp)),
+    xmid = mean(as.numeric(samp))
+  )
+
+# Plotit
+taxon_barplot <- ggplot(relAb_long,
+                        aes(x = samp, y = rel_ab, fill = taxon)) +
+  geom_bar(stat = "identity", width = 1.0, colour = NA) +
+  
+  geom_vline(data = group_positions[-1, ],
+             aes(xintercept = xmin - 0.5),
+             colour = "black", linewidth = 0.5) +
+  
+  annotate("text",
+           x     = group_positions$xmid,
+           y     = 1.04,
+           label = group_positions$mitonuclear,
+           size  = 4, fontface = "bold", vjust = 0) +
+  
+  scale_fill_manual(values = taxon_colours, name = "Family") +
+  
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     expand = c(0, 0),
+                     limits = c(0, 1.10)) +
+  
+  labs(x     = "Sample (by mitonuclear genotype)",
+       y     = "Relative Abundance",
+       title = "Gut Microbiota Composition by Mitonuclear Genotype") +
+  
+  theme_classic() +
+  theme(
+    axis.text.x     = element_blank(),
+    axis.ticks.x    = element_blank(),
+    plot.title      = element_text(hjust = 0.5, size = 13, face = "bold"),
+    legend.text     = element_text(size = 8, face = "italic"),
+    legend.title    = element_text(size = 9, face = "bold"),
+    legend.key.size = unit(0.4, "cm")
+  )
+
+print(taxon_barplot)
+
+ggsave("taxon_barplot_mitonuclear.pdf", taxon_barplot,
+       width = 12, height = 5, units = "in")
+ggsave("taxon_barplot_mitonuclear.png", taxon_barplot,
+       width = 12, height = 5, units = "in", dpi = 300)
+
+#####
+####
+###
+##
+#
+##################################################
+## SHANNON DIVERSITY PLOT for Fig 1
+##################################################
+library(vegan)
+
+# calculate shan on raw counts (before log transform)
+shannon <- diversity(t(d), index = "shannon")
+
+# Build df
+shannon_df <- data.frame(
+  samp        = ind$samp,
+  shannon     = shannon,
+  mitonuclear = ind$mitonuclear,
+  mito        = ind$mito
+)
+
+# setup col scheme
+mitonuclear_colours <- c("AA" = "#D55E00", "AB" = "#CC79A7", 
+                         "BA" = "#56B4E9", "BB" = "#009E73")
+
+# Wilcoxon test mito A vs B for annotation
+shannon_wilcox <- wilcox.test(shannon ~ ind$mito)
+shannon_p <- round(shannon_wilcox$p.value, 3)
+p_label <- ifelse(shannon_p < 0.001, "p < 0.001", paste0("p = ", shannon_p))# mito A vs B (Wilcoxon)
+
+library(ggplot2)
+library(ggpubr)
+
+# Nature-style colour palette - muted, print-safe
+mitonuclear_colours <- c("AA" = "#E64B35", "AB" = "#F39B7F", 
+                         "BA" = "#4DBBD5", "BB" = "#00A087")
+
+shannon_plot <- ggplot(shannon_df, aes(x = mitonuclear, y = shannon,
+                                       fill = mitonuclear, colour = mitonuclear)) +
+  ##############################################################
+  #### Shaded background bands to visually group mito A vs B ###
+  ##############################################################
+  annotate("rect", xmin = 0.5, xmax = 2.5, ymin = -Inf, ymax = Inf,
+           fill = "#E64B35", alpha = 0.04) +
+  annotate("rect", xmin = 2.5, xmax = 4.5, ymin = -Inf, ymax = Inf,
+           fill = "#4DBBD5", alpha = 0.04) +
+  
+  geom_boxplot(outlier.shape = NA, alpha = 0.3, width = 0.45,
+               linewidth = 0.4, colour = "grey30") +
+  geom_jitter(shape = 19, width = 0.15, size = 1.8, alpha = 0.85,
+              stroke = 0.3, colour = "grey20") +
+  
+  # Mito group brackets
+  geom_bracket(xmin = "AA", xmax = "AB", y.position = 2.35,
+               label = "Mitochondrial A", inherit.aes = FALSE,
+               label.size = 2.8, tip.length = 0.02, linewidth = 0.4) +
+  geom_bracket(xmin = "BA", xmax = "BB", y.position = 2.35,
+               label = "Mitochondrial B", inherit.aes = FALSE,
+               label.size = 2.8, tip.length = 0.02, linewidth = 0.4) +
+  
+  # p-value from Wilcoxon mito A vs B
+  annotate("text", x = 2.5, y = 2.52, 
+           label = p_label, size = 2.8, hjust = 0.5) +
+  
+  scale_fill_manual(values = mitonuclear_colours) +
+  scale_colour_manual(values = mitonuclear_colours) +
+  scale_y_continuous(limits = c(NA, 2.6), expand = c(0.02, 0)) +
+  
+  labs(x = "Mitonuclear genotype",
+       y = "Shannon diversity index") +
+  
+  theme_classic(base_size = 9, base_family = "Helvetica") +
+  theme(
+    # No title - goes in figure legend
+    plot.title       = element_blank(),
+    # Axes
+    axis.line        = element_line(linewidth = 0.4, colour = "black"),
+    axis.ticks       = element_line(linewidth = 0.4, colour = "black"),
+    axis.ticks.length = unit(2, "mm"),
+    axis.text        = element_text(size = 8, colour = "black"),
+    axis.title       = element_text(size = 9, colour = "black"),
+    # No legend needed - x axis labels are self-explanatory
+    legend.position  = "none",
+    # Minimal panel
+    panel.grid       = element_blank(),
+    plot.background  = element_rect(fill = "white", colour = NA),
+    plot.margin      = margin(8, 8, 8, 8, "mm")
+  )
+
+print(shannon_plot)
+
+ggsave("shannon_mitonuclear.pdf", shannon_plot,
+       width = 90, height = 80, units = "mm")  # single column = 90mm as per nature
+ggsave("shannon_mitonuclear.png", shannon_plot,
+       width = 90, height = 80, units = "mm", dpi = 300)
+ggsave("shannon_mitonuclear.pdf", shannon_plot, width = 6, height = 5, units = "in")
+ggsave("shannon_mitonuclear.png", shannon_plot, width = 6, height = 5, units = "in", dpi = 300)
+
+
+##################################################
+## PCoA PLOT Fig 1
+##################################################
+
+# BrayCurtis on raw counts... before log transform
+dDist <- vegdist(t(d), method = "bray")
+PcoA  <- cmdscale(dDist, eig = TRUE)  # eig=TRUE to extract % variance explained
+
+# Extract % variance explained for axis labels
+eig_vals  <- PcoA$eig
+pct_var   <- round(eig_vals / sum(eig_vals[eig_vals > 0]) * 100, 1)
+
+PcoDF <- data.frame(
+  ind,
+  Dim1 = PcoA$points[, 1],
+  Dim2 = PcoA$points[, 2]
+)
+
+pcoa_plot <- ggplot(PcoDF, aes(x = Dim1, y = Dim2, 
+                               colour = mitonuclear, fill = mitonuclear)) +
+  stat_ellipse(geom = "polygon", alpha = 0.08, linetype = "dashed", linewidth = 0.4) +
+  geom_point(size = 2.5, alpha = 0.9) +
+  scale_colour_manual(values = mitonuclear_colours, name = "Mitonuclear") +
+  scale_fill_manual(values = mitonuclear_colours, name = "Mitonuclear") +
+  labs(x     = paste0("PCoA Axis 1 (", pct_var[1], "% variance)"),
+       y     = paste0("PCoA Axis 2 (", pct_var[2], "% variance)"),
+       title = "Gut Microbiota Community Structure by Mitonuclear Genotype") +
+  theme_classic() +
+  theme(
+    plot.title      = element_text(hjust = 0.5, size = 13, face = "bold"),
+    legend.title    = element_text(size = 9, face = "bold"),
+    legend.text     = element_text(size = 8)
+  )
+
+print(pcoa_plot)
+ggsave("pcoa_mitonuclear.pdf", pcoa_plot, width = 7, height = 5, units = "in")
+ggsave("pcoa_mitonuclear.png", pcoa_plot, width = 7, height = 5, units = "in", dpi = 300)
+#
+##
+###
+####
+#####
+
+
+
 
 ### PERM ###
 #test for mito-nuclear effects in microbiota
@@ -89,12 +330,8 @@ perm3	#no. there is only an effect of mitochondria. (1_10)
 # PERMANOVA Analysis for Microbiota Community Structure
 # Using 1% in 10% samples filtering level
 #
-library(vegan)
-library(ggplot2)
 library(gridExtra)
 library(kableExtra)
-library(dplyr)
-
 
 set.seed(1984)
 # pop is perm1 above
@@ -176,8 +413,11 @@ create_mitonuclear_table <- function() {
 population_results <- create_population_table()
 mitonuclear_results <- create_mitonuclear_table()
 
+options(knitr.table.format = "simple")
+
 # Formatted with kable
-kable(population_results, 
+kable(population_results,
+      format = "html",
       caption = "PERMANOVA Results Testing Population Effects on Microbiota Community Structure (Bray-Curtis dissimilarity)",
       col.names = c("Factor", "R?", "F", "P-value", "Sig."),
       align = c('l', 'c', 'c', 'c', 'c')) %>% # set the factor name to LHS and centre data cols for separation
@@ -188,6 +428,7 @@ kable(population_results,
 
 
 kable(mitonuclear_results,
+      format = "html",
       caption = "PERMANOVA Results Testing Mitonuclear Effects on Microbiota Community Structure (Bray-Curtis dissimilarity)", 
       col.names = c("Factor", "R?", "F", "P-value", "Sig."),
       align = c('l', 'c', 'c', 'c', 'c')) %>%
@@ -332,9 +573,10 @@ layout(1)
 
 ### calculate relative abundances
 # log2 transform
+#relAb <- t(apply(d, 1, y=colSums(d), function(x, y){x/y}))
+
 d <- log2(d + 1)
 
-relAb <- t(apply(d, 1, y=colSums(d), function(x, y){x/y}))
 
 # Collect p-values to plot each ASV individually
 # make empty vectors to store
@@ -363,7 +605,8 @@ par(bty="n")
 
 
 for(i in 1:nrow(relAb)){
-  ASV <- rowInd$OTU.ID[i]
+  #ASV <- rowInd$OTU.ID[i]
+  ASV <- rowInd$`OTU ID`[i]
   y <- as.numeric(relAb[i,])
   x3 <- ind$mito
   
