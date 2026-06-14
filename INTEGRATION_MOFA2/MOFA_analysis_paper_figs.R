@@ -350,7 +350,7 @@ micro_anova_table <- data.frame(
   r_squared   = numeric()
 )
 
-for (factor_num in c(2, 4)) {
+for (factor_num in 1:10) {
   factor_data <- subset(factor_values_with_meta,
                         factor == paste0("Factor", factor_num))
   merged      <- merge(factor_data, micro_wide, by = "sample")
@@ -493,7 +493,7 @@ theme_msb <- function(base_size = 10) {
 geno_colors_msb <- c("AA" = "#E69F00", "AB" = "#CC4444",
                      "BA" = "#F0B8B8", "BB" = "#7B4F9E")
 
-sig_factors <- c(2, 4, 6)
+sig_factors <- 1:10
 
 save_plot <- function(plot_obj, filename, width = 8, height = 6) {
   ggsave(
@@ -545,7 +545,7 @@ micro_anova_titled <- arrangeGrob(
 
 ggsave(file.path(OUT_DIR, "Fig3C2_micro_anova_table.pdf"),
        plot   = micro_anova_titled,
-       width  = 12, height = 5,
+       width  = 12, height = 10,
        units  = "cm", device = "pdf", useDingbats = FALSE)
 message("Saved: Fig3C2_micro_anova_table.pdf")
 
@@ -558,12 +558,15 @@ var_df <- as.data.frame(var_data) %>%
   pivot_longer(-factor, names_to = "view", values_to = "r2") %>%
   mutate(
     factor = factor(factor, levels = paste0("Factor", 10:1)),
-    view   = recode(view, "fly" = "Transcriptome", "micro" = "Microbiome")
+    view   = dplyr::recode(view, "fly" = "Transcriptome", "micro" = "Microbiome")
   )
 
 fig3a <- ggplot(var_df, aes(x = view, y = factor, fill = r2)) +
   geom_tile(color = "white", linewidth = 0.5) +
-  geom_text(aes(label = round(r2, 1)), size = 2.8, color = "white") +
+  geom_text(aes(label = round(r2, 1),
+                colour = r2 > 5),   # threshold: adjust to your scale
+            size = 2.8) +
+  scale_colour_manual(values = c("TRUE" = "white", "FALSE" = "black"), guide = "none") +
   scale_fill_gradientn(
     colors = c("#F7FBFF", "#6BAED6", "#08306B"),
     name   = "R² (%)",
@@ -577,10 +580,10 @@ fig3a <- ggplot(var_df, aes(x = view, y = factor, fill = r2)) +
 save_plot(fig3a, "Fig3A_variance_explained.pdf", width = 8, height = 9)
 
 
-##  Factor violins 
+##  Factor violins — significant factors only (main figure)
 
 fig3b <- plot_factor(model,
-                     factors    = sig_factors,
+                     factors    = c(2, 4, 6),
                      color_by   = "mitonuclear",
                      add_violin = TRUE,
                      dodge      = TRUE) +
@@ -592,7 +595,25 @@ fig3b <- plot_factor(model,
         axis.text.x     = element_blank(),
         axis.ticks.x    = element_blank())
 
-save_plot(fig3b, "Fig3B_factor_violins.pdf", width = 12, height = 6)
+save_plot(fig3b, "Fig3B_factor_violins_sig.pdf", width = 12, height = 6)
+
+
+##  Factor violins — all 10 factors (supplemental)
+
+fig3b_all <- plot_factor(model,
+                         factors    = 1:10,
+                         color_by   = "mitonuclear",
+                         add_violin = TRUE,
+                         dodge      = TRUE) +
+  scale_fill_manual(values  = geno_colors_msb, name = "Genotype") +
+  scale_color_manual(values = geno_colors_msb, name = "Genotype") +
+  labs(title = "B (all factors)", x = "Genotype", y = "Factor value") +
+  theme_msb() +
+  theme(legend.position = "right",
+        axis.text.x     = element_blank(),
+        axis.ticks.x    = element_blank())
+
+save_plot(fig3b_all, "Fig3B_factor_violins_all10.pdf", width = 30, height = 6)
 
 
 ## ANOVA table 
@@ -791,11 +812,15 @@ run_enrichment <- function(model, factor_num, n_genes = 50) {
                     ont = "MF", pAdjustMethod = "BH",
                     pvalueCutoff = 0.05, qvalueCutoff = 0.2, readable = TRUE)
   
+  go_cc <- enrichGO(gene = entrez_ids$ENTREZID, OrgDb = org.Dm.eg.db,
+                    ont = "CC", pAdjustMethod = "BH",
+                    pvalueCutoff = 0.05, qvalueCutoff = 0.2, readable = TRUE)
+  
   kegg  <- enrichKEGG(gene = entrez_ids$ENTREZID, organism = "dme",
                       pAdjustMethod = "BH",
                       pvalueCutoff = 0.05, qvalueCutoff = 0.2)
   
-  list(go_bp = go_bp, go_mf = go_mf, kegg = kegg, genes = gene_list)
+  list(go_bp = go_bp, go_mf = go_mf, go_cc = go_cc, kegg = kegg, genes = gene_list)
 }
 
 enrichment_results <- list()
@@ -822,10 +847,12 @@ for (factor_num in sig_factors) {
   
   p_go_bp <- plot_enrichment(res$go_bp, paste0("Factor ", factor_num, " — GO Biological Process"))
   p_go_mf <- plot_enrichment(res$go_mf, paste0("Factor ", factor_num, " — GO Molecular Function"))
+  p_go_cc <- plot_enrichment(res$go_cc, paste0("Factor ", factor_num, " — GO Cellular Component"))
   p_kegg  <- plot_enrichment(res$kegg,  paste0("Factor ", factor_num, " — KEGG Pathways"))
   
   if (!is.null(p_go_bp)) save_plot(p_go_bp, paste0("Fig4_Factor", factor_num, "_GO_BP.pdf"),  width = 14, height = 10)
   if (!is.null(p_go_mf)) save_plot(p_go_mf, paste0("Fig4_Factor", factor_num, "_GO_MF.pdf"),  width = 14, height = 10)
+  if (!is.null(p_go_cc)) save_plot(p_go_cc, paste0("Fig4_Factor", factor_num, "_GO_CC.pdf"),  width = 14, height = 10)
   if (!is.null(p_kegg))  save_plot(p_kegg,  paste0("Fig4_Factor", factor_num, "_KEGG.pdf"),   width = 14, height = 10)
 }
 
@@ -840,6 +867,24 @@ for (factor_num in sig_factors) {
       arrange(p.adjust)
     write.csv(go_bp_df,
               file.path(OUT_DIR, paste0("Factor", factor_num, "_GO_BP_terms.csv")),
+              row.names = FALSE)
+  }
+  
+  if (!is.null(res$go_mf) && nrow(as.data.frame(res$go_mf)) > 0) {
+    go_mf_df <- as.data.frame(res$go_mf) %>%
+      dplyr::select(Description, GeneRatio, BgRatio, pvalue, p.adjust, geneID) %>%
+      arrange(p.adjust)
+    write.csv(go_mf_df,
+              file.path(OUT_DIR, paste0("Factor", factor_num, "_GO_MF_terms.csv")),
+              row.names = FALSE)
+  }
+  
+  if (!is.null(res$go_cc) && nrow(as.data.frame(res$go_cc)) > 0) {
+    go_cc_df <- as.data.frame(res$go_cc) %>%
+      dplyr::select(Description, GeneRatio, BgRatio, pvalue, p.adjust, geneID) %>%
+      arrange(p.adjust)
+    write.csv(go_cc_df,
+              file.path(OUT_DIR, paste0("Factor", factor_num, "_GO_CC_terms.csv")),
               row.names = FALSE)
   }
   
